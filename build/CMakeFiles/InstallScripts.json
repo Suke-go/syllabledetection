@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"C:/Users/kosuk/taccel/build/cmake_install.cmake",
-		"C:/Users/kosuk/taccel/build/examples/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

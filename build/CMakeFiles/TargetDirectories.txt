@@ -1,7 +1,0 @@
-C:/Users/kosuk/taccel/build/CMakeFiles/syllable.dir
-C:/Users/kosuk/taccel/build/CMakeFiles/INSTALL.dir
-C:/Users/kosuk/taccel/build/CMakeFiles/ALL_BUILD.dir
-C:/Users/kosuk/taccel/build/CMakeFiles/ZERO_CHECK.dir
-C:/Users/kosuk/taccel/build/examples/CMakeFiles/process_wav.dir
-C:/Users/kosuk/taccel/build/examples/CMakeFiles/INSTALL.dir
-C:/Users/kosuk/taccel/build/examples/CMakeFiles/ALL_BUILD.dir
