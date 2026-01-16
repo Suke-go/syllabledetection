@@ -1,0 +1,10 @@
+^C:\USERS\KOSUK\TACCEL\EXAMPLES\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/kosuk/taccel -BC:/Users/kosuk/taccel/build --check-stamp-file C:/Users/kosuk/taccel/build/examples/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
