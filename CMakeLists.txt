@@ -25,6 +25,7 @@ target_include_directories(syllable PUBLIC include)
 # Compiler warnings
 if(MSVC)
     target_compile_options(syllable PRIVATE /W4)
+    target_compile_definitions(syllable PRIVATE EXPORT_DLL)
 else()
     target_compile_options(syllable PRIVATE -Wall -Wextra -pedantic)
 endif()

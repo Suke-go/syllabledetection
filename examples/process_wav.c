@@ -1,26 +1,46 @@
 #include "syllable_detector.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// WAV Header struct
+// Minimal WAV header for output (standard 44-byte PCM)
+#pragma pack(push, 1)
 typedef struct {
-  char riff[4];
-  int overall_size;
-  char wave[4];
-  char fmt_chunk_marker[4];
-  int length_of_fmt;
-  short format_type;
-  short channels;
-  int sample_rate;
-  int byterate;
-  short block_align;
-  short bits_per_sample;
-  char data_chunk_header[4];
-  int data_size;
-} WavHeader;
+  char riff[4];           // "RIFF"
+  unsigned int file_size; // File size - 8
+  char wave[4];           // "WAVE"
+  char fmt_marker[4];     // "fmt "
+  unsigned int fmt_size;  // 16 for PCM
+  unsigned short format;  // 1 for PCM
+  unsigned short channels;
+  unsigned int sample_rate;
+  unsigned int byte_rate;
+  unsigned short block_align;
+  unsigned short bits_per_sample;
+  char data_marker[4]; // "data"
+  unsigned int data_size;
+} WavHeaderOut;
+#pragma pack(pop)
 
-#include <math.h>
+// Helper to find a chunk in WAV file
+static int find_chunk(FILE *fp, const char *id, unsigned int *size) {
+  char chunk_id[4];
+  unsigned int chunk_size;
+
+  while (fread(chunk_id, 1, 4, fp) == 4) {
+    if (fread(&chunk_size, 4, 1, fp) != 1)
+      return 0;
+
+    if (memcmp(chunk_id, id, 4) == 0) {
+      *size = chunk_size;
+      return 1;
+    }
+    // Skip this chunk
+    fseek(fp, chunk_size, SEEK_CUR);
+  }
+  return 0;
+}
 
 int main(int argc, char **argv) {
   if (argc < 2) {
@@ -37,281 +57,212 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  WavHeader header;
-  if (fread(&header, sizeof(WavHeader), 1, in_fp) != 1) {
-    printf("Failed to read WAV header\n");
+  // Read RIFF header
+  char riff[4], wave[4];
+  unsigned int riff_size;
+  fread(riff, 1, 4, in_fp);
+  fread(&riff_size, 4, 1, in_fp);
+  fread(wave, 1, 4, in_fp);
+
+  if (memcmp(riff, "RIFF", 4) != 0 || memcmp(wave, "WAVE", 4) != 0) {
+    printf("Not a valid WAV file\n");
     fclose(in_fp);
     return 1;
   }
 
-  printf("Processing %s\n", input_filename);
-  printf("Sample Rate: %d\n", header.sample_rate);
-  printf("Channels: %d\n", header.channels);
-  printf("Bits: %d\n", header.bits_per_sample);
-
-  if (header.channels != 1) {
-    printf("Warning: Only mono supported. Processing first channel only if "
-           "interleaved.\n");
+  // Find fmt chunk
+  unsigned int fmt_size;
+  if (!find_chunk(in_fp, "fmt ", &fmt_size)) {
+    printf("Could not find fmt chunk\n");
+    fclose(in_fp);
+    return 1;
   }
 
-  FILE *out_fp = NULL;
-  if (output_filename) {
-    out_fp = fopen(output_filename, "wb");
-    if (!out_fp) {
-      printf("Could not open output file %s\n", output_filename);
-      fclose(in_fp);
-      return 1;
-    }
-    // Write header to output (will update size later if needed, strictly we
-    // should but for now copy is ok)
-    fwrite(&header, sizeof(WavHeader), 1, out_fp);
+  unsigned short format, channels, bits_per_sample, block_align;
+  unsigned int sample_rate, byte_rate;
+
+  fread(&format, 2, 1, in_fp);
+  fread(&channels, 2, 1, in_fp);
+  fread(&sample_rate, 4, 1, in_fp);
+  fread(&byte_rate, 4, 1, in_fp);
+  fread(&block_align, 2, 1, in_fp);
+  fread(&bits_per_sample, 2, 1, in_fp);
+
+  // Skip rest of fmt chunk if larger than 16 bytes
+  if (fmt_size > 16) {
+    fseek(in_fp, fmt_size - 16, SEEK_CUR);
+  }
+
+  printf("Processing %s\n", input_filename);
+  printf("Sample Rate: %u\n", sample_rate);
+  printf("Channels: %hu\n", channels);
+  printf("Bits: %hu\n", bits_per_sample);
+  printf("Format: %hu (1=PCM)\n", format);
+
+  if (channels != 1) {
+    printf("Warning: Only mono supported.\n");
+  }
+  if (bits_per_sample != 16) {
+    printf("Warning: Only 16-bit supported.\n");
+  }
+
+  // Find data chunk
+  unsigned int data_size;
+  if (!find_chunk(in_fp, "data", &data_size)) {
+    printf("Could not find data chunk\n");
+    fclose(in_fp);
+    return 1;
+  }
+
+  int num_samples = data_size / sizeof(short);
+  printf("Data size: %u bytes (%d samples)\n", data_size, num_samples);
+
+  short *pcm_data = (short *)malloc(data_size);
+  if (!pcm_data) {
+    printf("Memory allocation failed.\n");
+    fclose(in_fp);
+    return 1;
+  }
+
+  size_t read_count = fread(pcm_data, sizeof(short), num_samples, in_fp);
+  fclose(in_fp);
+
+  if (read_count != num_samples) {
+    printf("Warning: Expected %d samples but read %zu\n", num_samples,
+           read_count);
+    num_samples = (int)read_count;
+  }
+
+  // Convert to float
+  float *float_data = (float *)malloc(num_samples * sizeof(float));
+  if (!float_data) {
+    free(pcm_data);
+    return 1;
+  }
+  for (int i = 0; i < num_samples; i++) {
+    float_data[i] = pcm_data[i] / 32768.0f;
   }
 
   // Config
-  SyllableConfig config = syllable_default_config(header.sample_rate);
+  SyllableConfig config = syllable_default_config(sample_rate);
   const char *threshold_env = getenv("SYLLABLE_THRESHOLD");
-  if (threshold_env && threshold_env[0] != '\0') {
+  if (threshold_env && threshold_env[0] != '\0')
     config.threshold_peak_rate = (float)atof(threshold_env);
-  }
   const char *adaptive_k_env = getenv("SYLLABLE_ADAPT_K");
-  if (adaptive_k_env && adaptive_k_env[0] != '\0') {
+  if (adaptive_k_env && adaptive_k_env[0] != '\0')
     config.adaptive_peak_rate_k = (float)atof(adaptive_k_env);
-  }
   const char *adaptive_tau_env = getenv("SYLLABLE_ADAPT_TAU_MS");
-  if (adaptive_tau_env && adaptive_tau_env[0] != '\0') {
+  if (adaptive_tau_env && adaptive_tau_env[0] != '\0')
     config.adaptive_peak_rate_tau_ms = (float)atof(adaptive_tau_env);
-  }
   const char *voiced_hold_env = getenv("SYLLABLE_VOICED_HOLD_MS");
-  if (voiced_hold_env && voiced_hold_env[0] != '\0') {
+  if (voiced_hold_env && voiced_hold_env[0] != '\0')
     config.voiced_hold_ms = (float)atof(voiced_hold_env);
-  }
+
   printf("PeakRate floor: %.6f\n", config.threshold_peak_rate);
   printf("Adaptive k: %.2f\n", config.adaptive_peak_rate_k);
   printf("Adaptive tau (ms): %.1f\n", config.adaptive_peak_rate_tau_ms);
   printf("Voiced hold (ms): %.1f\n", config.voiced_hold_ms);
+
   SyllableDetector *detector = syllable_create(&config);
   if (!detector) {
     printf("Failed to create detector.\n");
-    if (out_fp)
-      fclose(out_fp);
-    fclose(in_fp);
+    free(pcm_data);
+    free(float_data);
     return 1;
   }
 
-// Process loop
-#define BUFFER_SIZE 1024
-#define MAX_EVENTS 64
+  // Store all events
+  int max_total_events = 2000;
+  SyllableEvent *all_events =
+      (SyllableEvent *)malloc(max_total_events * sizeof(SyllableEvent));
+  int total_event_count = 0;
 
-  // We assume 16-bit PCM for now.
-  short pcm_buffer[BUFFER_SIZE];
-  float float_buffer[BUFFER_SIZE];
-  SyllableEvent events[MAX_EVENTS];
+  // Process in chunks
+  int chunk_size = 1024;
+  SyllableEvent buffer_events[64];
 
-  long long total_samples_read = 0;
-  int sample_rate = header.sample_rate;
-
-  int samples_read;
-  while ((samples_read = fread(pcm_buffer, sizeof(short), BUFFER_SIZE, in_fp)) >
-         0) {
-    // Convert to float
-    for (int i = 0; i < samples_read; i++) {
-      // Simple conversion for 16-bit
-      float_buffer[i] = pcm_buffer[i] / 32768.0f;
-    }
-
-    int count = syllable_process(detector, float_buffer, samples_read, events,
-                                 MAX_EVENTS);
-
-    // If outputting, mix pulses
-    if (out_fp) {
-      for (int i = 0; i < count; i++) {
-        if (!events[i].is_accented)
-          continue;
-
-        // Calculate sample index relative to the start of THIS buffer
-        // events[i].time_seconds is the global time
-        double global_time = events[i].time_seconds;
-        long long event_sample_global = (long long)(global_time * sample_rate);
-
-        // We need to inject the pulse into the pcm_buffer
-        // The pulse might span across buffers, but for simplicity let's just
-        // draw it if it falls in the current buffer.
-        // A 10ms pulse is ~160 samples at 16k.
-
-        // To do this strictly correctly given the streaming nature (events
-        // might be slightly delayed or past?) syllable_process returns events
-        // that were detected *just now*. Their timestamps 'should' be within
-        // the recent past.
-
-        // Let's assume we can just overwrite the buffer at the corresponding
-        // location. We need to map time_seconds back to an index in the current
-        // float_buffer ??? Wait, syllable_process might return an event that
-        // happened a bit ago due to smoothing delay. If the delay is larger
-        // than BUFFER_SIZE, we can't write it to the *current* buffer
-        // effectively if we've already written that buffer to disk. BUT,
-        // usually we write to disk *after* processing. Let's check: we haven't
-        // written `pcm_buffer` to `out_fp` yet in this loop.
-
-        // However, if the event time is older than `total_samples_read` (start
-        // of this buffer), then we missed our chance to write it to the file
-        // for *that* exact sample. Let's just write the pulse at end of the
-        // buffer or "now" if it's too late? Or better, just inject a "beep" at
-        // the *current* position in the audio stream whenever an event is
-        // emitted. The precise timing alignment in the output audio might be
-        // slightly off (delayed) but for "listening" it serves the purpose of
-        // "marking detection".
-
-        // Actually, let's try to be somewhat accurate.
-        // relative_index = event_sample_global - total_samples_read;
-        // If relative_index is within [0, samples_read), we mix here.
-        // If it's negative (happened in past buffer), we just mix at 0 (or
-        // ignore?). If it's positive (future?), mix there.
-
-        // Let's print the delay to see.
-        // long long current_buffer_start = total_samples_read;
-        // long long diff = event_sample_global - current_buffer_start;
-        // printf("Diff: %lld\n", diff);
-
-        // For a simple 'mark', let's just create a 100ms tone at the *current*
-        // frame being processed where the event was detected. Since `events`
-        // are output *after* processing `samples_read`, let's just burn the
-        // mark into the *next* detected spots or right here.
-
-        // Simpler approach: Just beep at the location corresponding to
-        // `event.time_seconds`. If that location is already written to disk, we
-        // can't easily go back with streaming write unless we fseek. `out_fp`
-        // is a file, so we CAN fseek.
-
-        long long global_pos =
-            (long long)(events[i].time_seconds * sample_rate);
-        long file_offset = sizeof(WavHeader) + global_pos * sizeof(short);
-
-        // Remember current pos
-        long current_write_pos = ftell(out_fp);
-
-        // Seek and write pulse
-        if (fseek(out_fp, file_offset, SEEK_SET) == 0) {
-          // Generate 100ms beep
-          int beep_len = sample_rate / 20; // 50ms
-          short *beep_buf = malloc(beep_len * sizeof(short));
-          // Read existing if possible to mix? Reading from write_mode file
-          // might be tricky. Let's just overwrite for maximum clarity "Pulse".
-          for (int k = 0; k < beep_len; ++k) {
-            beep_buf[k] = (short)(15000.0 * sin(2.0 * 3.14159 * 1000.0 * k /
-                                                sample_rate));
-          }
-          fwrite(beep_buf, sizeof(short), beep_len, out_fp);
-          free(beep_buf);
-
-          // Restore pos
-          fseek(out_fp, current_write_pos, SEEK_SET);
-        }
-      }
-
-      // Write the original buffer (or mixed if we did memory mixing)
-      // Since we did fseek mixing, we can just write the original buffer now.
-      // WAIT. If we write the original buffer NOW, we might OVERWRITE the pulse
-      // we just wrote if the pulse was inside THIS buffer range. Yes.
-
-      // Better Strategy:
-      // 1. Modify `pcm_buffer` in memory if the event is inside
-      // [total_samples_read, total_samples_read + samples_read].
-      // 2. If the event is in the PAST (previous buffers), fseek backwards and
-      // modify file.
-
-      for (int i = 0; i < count; i++) {
-        if (!events[i].is_accented)
-          continue;
-
-        long long global_pos =
-            (long long)(events[i].time_seconds * sample_rate);
-        long long rel_pos = global_pos - total_samples_read;
-
-        int beep_len = sample_rate / 20; // 50ms
-
-        for (int k = 0; k < beep_len; ++k) {
-          long long p = rel_pos + k;
-          short sample_val =
-              (short)(15000.0 * sin(2.0 * 3.14159 * 1000.0 * k / sample_rate));
-
-          // If inside current buffer
-          if (p >= 0 && p < samples_read) {
-            pcm_buffer[p] =
-                sample_val; // Overwrite or Mix? Overwrite is clearer.
-          } else if (p < 0) {
-            // Inside previous buffer - modify file
-            long file_offset =
-                sizeof(WavHeader) + (total_samples_read + p) * sizeof(short);
-            long current = ftell(out_fp); // Should be start of this write? No,
-                                          // we haven't written yet.
-            // Actually `out_fp` points to where we are ABOUT to write
-            // `pcm_buffer`. So `ftell(out_fp)` should be `sizeof(WavHeader) +
-            // total_samples_read * 2`.
-
-            if (fseek(out_fp, file_offset, SEEK_SET) == 0) {
-              fwrite(&sample_val, sizeof(short), 1, out_fp);
-              fseek(out_fp, current, SEEK_SET);
-            }
-          }
-          // If p >= samples_read, it spills into next buffer. We can't handle
-          // it easily here unless we carry over state. But typically detections
-          // describe things that just happened, so p shouldn't be far in
-          // future. Actually delay is usually positive, so `global_pos` <
-          // `current_time`. `rel_pos` is likely negative.
-        }
-
-        printf("[Syllable] Time: %.3fs | Peak: %.3f | Eng: %.3f | F0: %.1f | "
-               "Sc: %.2f\n",
-               events[i].time_seconds, events[i].peak_rate, events[i].energy,
-               events[i].f0, events[i].prominence_score);
-      }
-
-      // Write buffer
-      fwrite(pcm_buffer, sizeof(short), samples_read, out_fp);
-    }
-
-    for (int i = 0; i < count; i++) {
-      if (!out_fp) {
-        printf("[Syllable] Time: %.3fs | Peak: %.3f | Eng: %.3f | F0: %.1f | "
-               "Sc: %.2f\n",
-               events[i].time_seconds, events[i].peak_rate, events[i].energy,
-               events[i].f0, events[i].prominence_score);
+  for (int i = 0; i < num_samples; i += chunk_size) {
+    int n = (num_samples - i < chunk_size) ? (num_samples - i) : chunk_size;
+    int count =
+        syllable_process(detector, &float_data[i], n, buffer_events, 64);
+    for (int k = 0; k < count; k++) {
+      if (total_event_count < max_total_events) {
+        all_events[total_event_count++] = buffer_events[k];
       }
     }
-
-    total_samples_read += samples_read;
   }
 
-  // Flush
-  int count = syllable_flush(detector, events, MAX_EVENTS);
-  for (int i = 0; i < count; i++) {
-    printf("[Syllable] Time: %.3fs | PeakRate: %.3f | Energy: %.3f | F0: %.1f "
-           "| Score: %.2f\n",
-           events[i].time_seconds, events[i].peak_rate, events[i].energy,
-           events[i].f0, events[i].prominence_score);
-    // Flush pulses could be added too, similar logic.
-    if (out_fp) {
-      if (events[i].is_accented) {
-        long long global_pos =
-            (long long)(events[i].time_seconds * sample_rate);
-        int beep_len = sample_rate / 20; // 50ms
-        for (int k = 0; k < beep_len; k++) {
-          short sample_val =
-              (short)(15000.0 * sin(2.0 * 3.14159 * 1000.0 * k / sample_rate));
-          long file_offset =
-              sizeof(WavHeader) + (global_pos + k) * sizeof(short);
-          fseek(out_fp, file_offset, SEEK_SET); // YOLO checks
-          fwrite(&sample_val, sizeof(short), 1, out_fp);
-        }
-        // Seek back to end
-        fseek(out_fp, 0, SEEK_END);
-      }
+  int count_flush = syllable_flush(detector, buffer_events, 64);
+  for (int k = 0; k < count_flush; k++) {
+    if (total_event_count < max_total_events) {
+      all_events[total_event_count++] = buffer_events[k];
     }
   }
 
   syllable_destroy(detector);
-  if (out_fp)
-    fclose(out_fp);
-  fclose(in_fp);
+
+  // Print and mix pulses
+  for (int i = 0; i < total_event_count; i++) {
+    printf("[Syllable] Time: %.3fs | Peak: %.3f | Slope: %.1f | Eng: %.3f | "
+           "F0: %.1f (d:%.1f) | Score: %.2f\n",
+           all_events[i].time_seconds, all_events[i].peak_rate,
+           all_events[i].pr_slope, all_events[i].energy, all_events[i].f0,
+           all_events[i].delta_f0, all_events[i].prominence_score);
+
+    if (output_filename && all_events[i].is_accented) {
+      int pos = (int)(all_events[i].time_seconds * sample_rate);
+      int beep_len = sample_rate / 20; // 50ms
+      for (int k = 0; k < beep_len; k++) {
+        if (pos + k >= 0 && pos + k < num_samples) {
+          float val = 0.5f * sinf(2.0f * 3.14159f * 1000.0f * k / sample_rate);
+          float_data[pos + k] += val;
+          if (float_data[pos + k] > 1.0f)
+            float_data[pos + k] = 1.0f;
+          if (float_data[pos + k] < -1.0f)
+            float_data[pos + k] = -1.0f;
+        }
+      }
+    }
+  }
+
+  // Write output
+  if (output_filename) {
+    FILE *out_fp = fopen(output_filename, "wb");
+    if (!out_fp) {
+      printf("Could not open output file %s\n", output_filename);
+    } else {
+      // Convert back to short
+      for (int i = 0; i < num_samples; i++) {
+        pcm_data[i] = (short)(float_data[i] * 32767.0f);
+      }
+
+      // Build standard 44-byte WAV header
+      WavHeaderOut hdr;
+      memcpy(hdr.riff, "RIFF", 4);
+      hdr.file_size = 36 + num_samples * sizeof(short);
+      memcpy(hdr.wave, "WAVE", 4);
+      memcpy(hdr.fmt_marker, "fmt ", 4);
+      hdr.fmt_size = 16;
+      hdr.format = 1;
+      hdr.channels = 1;
+      hdr.sample_rate = sample_rate;
+      hdr.byte_rate = sample_rate * sizeof(short);
+      hdr.block_align = sizeof(short);
+      hdr.bits_per_sample = 16;
+      memcpy(hdr.data_marker, "data", 4);
+      hdr.data_size = num_samples * sizeof(short);
+
+      fwrite(&hdr, sizeof(WavHeaderOut), 1, out_fp);
+      fwrite(pcm_data, sizeof(short), num_samples, out_fp);
+      fclose(out_fp);
+      printf("Written result to %s (%d samples)\n", output_filename,
+             num_samples);
+    }
+  }
+
+  free(pcm_data);
+  free(float_data);
+  free(all_events);
+
   return 0;
 }
