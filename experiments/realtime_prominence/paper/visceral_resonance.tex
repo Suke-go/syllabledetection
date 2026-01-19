@@ -1,0 +1,165 @@
+%% Visceral Resonance: Demo Paper for Human Augmentation Conference
+%% LaTeX Template (ACM/SIGCHI Style)
+
+\documentclass[sigconf, anonymous=false]{acmart}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+\title{Visceral Resonance: Augmenting Speech Listening with Prominence-Synchronized Abdominal Electrical Muscle Stimulation}
+
+\author{Anonymous Author(s)}
+\affiliation{%
+  \institution{Anonymous Institution}
+  \city{Anonymous City}
+  \country{Anonymous Country}
+}
+\email{anonymous@example.com}
+
+\begin{abstract}
+Our goal is to evoke the sensation of speech being felt in the gut, transforming prosodic emphasis into visceral sensations that may deepen emotional engagement. We present Visceral Resonance, a system that augments speech listening by delivering synchronized electrical muscle stimulation (EMS) to the listener's abdomen in response to real-time acoustic prominence detection. We hypothesize that EMS-induced abdominal muscle contractions produce secondary intra-abdominal pressure changes, potentially triggering subthreshold interoceptive signals that contribute to embodied affective experience. In our demonstration, one participant speaks into a microphone while another receives prominence-synchronized stimulation via a commercial EMS device. This paper describes the motivation, system architecture, detection algorithm, and preliminary evaluation results.
+\end{abstract}
+
+\begin{CCSXML}
+<ccs2012>
+<concept>
+<concept_id>10003120.10003121.10003122</concept_id>
+<concept_desc>Human-centered computing~Haptic devices</concept_desc>
+<concept_significance>500</concept_significance>
+</concept>
+</ccs2012>
+\end{CCSXML}
+
+\ccsdesc[500]{Human-centered computing~Haptic devices}
+
+\keywords{Electrical muscle stimulation, interoception, prosodic prominence, speech augmentation}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+Powerful words move us from the gut. Across cultures, we speak of speeches that hit you in the core, words that resonate in your belly, and messages felt deep inside. These expressions are not mere metaphor but point to a fundamental connection between visceral sensation and emotional experience. The question we address is whether this connection can be artificially evoked to deepen engagement with spoken communication.
+
+Neuroscience provides a theoretical basis for this intuition. The insular cortex integrates signals from internal organs including the gut and heart, and is implicated in emotional awareness~\cite{craig2002interoception, critchley2017interoception}. The Somatic Marker Hypothesis proposes that visceral states carry emotional significance and influence cognition~\cite{damasio1994}. Prior work has demonstrated that artificially modulating physiological responses can amplify emotional experience. Fukushima and Kajimoto~\cite{fukushima2012piloerection} showed that inducing piloerection at emotionally salient moments heightens subjective surprise. Vibrotactile systems synchronized with films and music increase immersion and arousal~\cite{israr2014haptic, danieau2012enhancing}. However, most haptic approaches target cutaneous sensation rather than deeper visceral experience.
+
+We propose Visceral Resonance, a system that delivers electrical muscle stimulation to the abdomen synchronized with prosodic prominence in speech. Our hypothesis is that EMS-induced contraction of the abdominal wall produces secondary intra-abdominal pressure changes that may stimulate visceral mechanoreceptors at subthreshold levels. We do not claim to directly activate interoceptive afferents but propose that the cascade from skeletal muscle contraction to abdominal cavity compression constitutes a plausible pathway for evoking visceral-like sensations that enhance emotional resonance with the speaker.
+
+\section{System Architecture}
+
+The system consists of three components. A microphone captures the speaker's voice in real time. A prominence detection module computes a continuous score representing the acoustic salience of each moment. An EMS output stage converts this score into electrical stimulation delivered to the listener's abdomen via the YAMAN Dancing EMS device.
+
+\subsection{Real-Time Prominence Detection}
+
+Prior prominence detection methods fall into two categories, neither suitable for our application. Offline approaches such as Mermelstein's convex hull algorithm~\cite{wagner2010unsupervised} require the entire utterance for analysis, introducing unacceptable latency. Neural approaches using wav2vec or Transformer architectures achieve high accuracy but demand GPU computation and context windows of several hundred milliseconds, precluding the embodied synchrony between speech and stimulation that our application requires.
+
+Our algorithm addresses these limitations by satisfying three constraints simultaneously. First, it operates causally, processing each audio sample without access to future data. Second, it maintains input-to-output latency below 20~ms. Third, it runs on commodity CPUs with less than 1~MB memory footprint. These properties enable perceptual coincidence between hearing emphatic speech and feeling muscular stimulation.
+
+\subsubsection{Feature Extraction}
+
+Prosodic prominence arises from multiple acoustic cues. Our detection algorithm fuses six complementary features computed over short-time frames at sample rate $f_s = 48$~kHz with frame size $N = 512$ samples and hop size $H = 256$ samples. These features include frame energy for overall loudness, peak rate measuring envelope slope for voiced onset detection, spectral flux quantifying rapid spectral changes at syllable onsets, high-frequency energy above 2~kHz capturing consonant transients, MFCC delta measuring timbre change magnitude, and wavelet coefficients for multi-scale transient detection. The spectral flux is computed as the half-wave rectified Euclidean distance between consecutive magnitude spectra
+\begin{equation}
+\Phi_t = \sqrt{\frac{1}{K} \sum_{k=0}^{K-1} \left( \max(0, |X_t[k]| - |X_{t-1}[k]|) \right)^2}
+\end{equation}
+where half-wave rectification ensures sensitivity to onsets rather than offsets.
+
+\subsubsection{Online Calibration}
+
+Fixed-threshold approaches fail across varying recording conditions. We instead employ online calibration during a two-second initialization period. For each feature $f_k$, we estimate the 95th percentile of noise-floor values $P_{95}(f_k)$ and compute adaptive thresholds
+\begin{equation}
+\theta_k = P_{95}(f_k) \times 10^{\text{SNR}/10}
+\end{equation}
+where $\text{SNR} = 6$~dB by default. This SNR-based formulation provides mathematically grounded adaptation to speaker volume and ambient noise without manual tuning.
+
+\subsubsection{Geometric Mean Fusion}
+
+Traditional weighted-average fusion can be dominated by single noisy features. We instead compute the geometric mean of features exceeding their respective thresholds
+\begin{equation}
+S_t = \sigma\left(\max\left(\sqrt[n]{\prod_{r_k > 1} r_k}, \frac{\max_k r_k}{2}\right)\right)
+\end{equation}
+where $r_k = f_k / \theta_k$ is the feature ratio and $\sigma(x) = x/(1+x)$ provides soft saturation to $[0, 1)$. This formulation requires multiple features to exceed threshold simultaneously, providing robustness to noise spikes while remaining sensitive to genuine prominence events. The compiled C library achieves a real-time factor below 0.1 on commodity hardware.
+
+\subsection{EMS Output and Hardware Configuration}
+
+The complete system consists of a control PC running the prominence detection software, an EMS generator (Dancing EMS, YA-MAN), a recording microphone (ECM8000, Behringer), an audio interface (UAC-8, ZOOM), an amplifier (AX-501, TEAC), and speakers (S-300NEO, TEAC). The Dancing EMS device automatically converts input audio electrical signals into EMS stimulation pulses, with stimulation intensity proportional to signal amplitude.
+
+The prominence detection module outputs an 80~Hz sinusoidal tone with amplitude modulated by the fusion score. This acoustic signal is fed directly to the EMS device, which performs the audio-to-EMS conversion. The sinusoidal carrier frequency was chosen to produce comfortable rhythmic muscle contractions perceptible as pulsation rather than continuous tetanic contraction.
+
+\subsubsection{Perceptual Delay Characterization}
+
+To ensure temporal synchronization between auditory stimuli and EMS-induced body sensation, we conducted a preliminary experiment quantifying the perceptual delay difference. Nine participants experienced three types of rhythmic patterns presented through two modalities, sound and EMS, in separate trials. Participants tapped in synchrony with the perceived rhythm, and the resulting tap timing data were subjected to cross-correlation analysis in MATLAB to determine perceptual delay differences between modalities.
+
+Results indicated a systematic delay of approximately 50 to 80~ms for EMS perception relative to auditory perception. This delay arises from the combined latencies of audio-to-EMS conversion, neuromuscular activation, and somatosensory processing. Based on these findings, we introduce a compensatory audio delay of 50 to 100~ms in the demonstration configuration, ensuring perceptual coincidence between hearing emphatic speech and feeling the corresponding abdominal stimulation.
+
+
+\section{Evaluation}
+
+We evaluated the accuracy of the prominence detection algorithm by comparing system outputs against human annotation. We collected speech samples from N speakers reading prepared passages containing varied prosodic patterns. Two trained annotators independently marked prominent syllables according to established prosodic prominence annotation guidelines~\cite{wagner2010unsupervised}. Inter-annotator agreement was measured using Cohen's kappa.
+
+For each sample, we computed the system's prominence score at 10~ms intervals and identified peaks exceeding the gating threshold. We aligned system detections with annotator markings using a 100~ms tolerance window. We report precision, recall, and F1 score for the detection task.
+
+\subsection{Results}
+
+% TODO: Fill in after data collection
+Preliminary results will be reported following data collection. We expect precision above 0.8 and recall above 0.7, indicating that the system reliably detects perceptually prominent moments while maintaining acceptable false positive rates.
+
+\section{Demonstration}
+
+The demonstration employs a speaker-listener dyad configuration. The speaker stands in an acoustically isolated booth with a microphone. The listener wears noise-canceling headphones and EMS electrodes placed on the rectus abdominis. Audio playback is delayed by 50 to 100~ms to synchronize with EMS output, ensuring perceptual coincidence between hearing emphasis and feeling stimulation.
+
+We chose the abdomen as the stimulation site for three reasons. First, cross-cultural expressions link the abdomen to emotional processing, as evidenced by phrases such as gut feeling in English and the concept of hara in Japanese culture. Second, the rectus abdominis overlies the abdominal cavity, and its contraction produces intra-abdominal pressure changes that may stimulate visceral mechanoreceptors. Third, the insular cortex processes interoceptive signals including those from the gut and is implicated in emotional awareness.
+
+The experience flow consists of a two-minute briefing, a two-second automatic calibration, a five-minute demonstration during which the speaker delivers speech while the listener feels synchronized EMS, and a two-minute debriefing session. Safety measures include user-controllable intensity, participant screening for contraindications, and session time limits.
+
+\section{Discussion}
+
+This demonstration invites participants to experience the sensation of speech being felt in the gut. By targeting the abdomen rather than peripheral body sites, we aim to evoke visceral-like sensations that may enhance emotional engagement with spoken communication. The key contribution of this work is the integration of real-time prosodic analysis with abdominal EMS to create an embodied listening experience.
+
+Future work will include controlled experiments comparing conditions with and without EMS, physiological measurements such as heart rate variability and skin conductance, and exploration of individual differences in interoceptive sensitivity as a moderating factor.
+
+\section{Conclusion}
+
+We presented Visceral Resonance, a system that augments speech listening through prominence-synchronized abdominal EMS. Our demonstration shows that real-time acoustic analysis can drive meaningful haptic feedback that transforms emphatic speech into embodied experience.
+
+\bibliographystyle{ACM-Reference-Format}
+\begin{thebibliography}{99}
+
+\bibitem{israr2014haptic}
+A. Israr and I. Poupyrev.
+Tactile brush: Drawing on skin with a tactile grid display.
+In \textit{Proc. CHI'11}, pages 2019--2028, 2011.
+
+\bibitem{danieau2012enhancing}
+F. Danieau, A. L{\'e}cuyer, P. Guillotel, J. Fleureau, N. Mollet, and M. Christie.
+Enhancing audiovisual experience with haptic feedback: A survey.
+\textit{IEEE Trans. Haptics}, 6(2):193--205, 2012.
+
+\bibitem{fukushima2012piloerection}
+S. Fukushima and H. Kajimoto.
+Facilitating a surprised feeling by artificial control of piloerection on the forearm.
+In \textit{Proc. Augmented Human}, pages 1--4, 2012.
+
+\bibitem{craig2002interoception}
+A.D. Craig.
+How do you feel? Interoception: The sense of the physiological condition of the body.
+\textit{Nature Reviews Neuroscience}, 3(8):655--666, 2002.
+
+\bibitem{critchley2017interoception}
+H.D. Critchley and S.N. Garfinkel.
+Interoception and emotion.
+\textit{Current Opinion in Psychology}, 17:7--14, 2017.
+
+\bibitem{damasio1994}
+A.R. Damasio.
+\textit{Descartes' Error: Emotion, Reason, and the Human Brain}.
+Putnam, 1994.
+
+\bibitem{wagner2010unsupervised}
+P. Wagner, J. Trouvain, and F. Zimmerer.
+Unsupervised prosodic prominence detection in German spontaneous speech.
+In \textit{Proc. INTERSPEECH}, pages 1853--1856, 2010.
+
+\end{thebibliography}
+
+\end{document}

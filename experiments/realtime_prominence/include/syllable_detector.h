@@ -72,9 +72,6 @@ typedef struct {
   float weight_wavelet;       // Weight for Wavelet Transform (default: 0.20)
   float weight_voiced_bonus;  // Weight for voiced bonus (default: 0.10)
 
-  // Fusion blend ratio: fusion = alpha * max + (1-alpha) * weighted_avg
-  float fusion_blend_alpha; // Blend ratio for max/avg (default: 0.6)
-
   // Unvoiced onset detection
   float
       unvoiced_onset_threshold; // Threshold for unvoiced onsets (default: 0.5)
@@ -82,11 +79,6 @@ typedef struct {
 
   // Robustness defaults
   int enable_agc; // Enable Automatic Gain Control (default: 1)
-
-  // --- Real-Time Mode (NEW) ---
-  int realtime_mode; // 0=offline (adaptive), 1=realtime (default: 0)
-  float calibration_duration_ms; // Calibration duration in ms (default: 2000.0)
-  float snr_threshold_db;        // SNR threshold in dB (default: 6.0)
 
   // User Memory (Optional, set to NULL to use malloc/free)
   void *(*user_malloc)(size_t);
@@ -154,30 +146,6 @@ SYLLABLE_API void syllable_destroy(SyllableDetector *detector);
 
 // Helper to get default config
 SYLLABLE_API SyllableConfig syllable_default_config(int sample_rate);
-
-// --- Real-Time Mode API (NEW) ---
-
-/**
- * @brief Enable or disable real-time mode
- * @param detector Detector instance
- * @param enable 1 to enable, 0 to disable
- */
-SYLLABLE_API void syllable_set_realtime_mode(SyllableDetector *detector,
-                                             int enable);
-
-/**
- * @brief Reset calibration and start real-time mode
- * @param detector Detector instance
- * @note If realtime_mode is disabled, this function enables it automatically
- */
-SYLLABLE_API void syllable_recalibrate(SyllableDetector *detector);
-
-/**
- * @brief Check if detector is currently calibrating
- * @param detector Detector instance
- * @return 1 if calibrating, 0 otherwise
- */
-SYLLABLE_API int syllable_is_calibrating(SyllableDetector *detector);
 
 #ifdef __cplusplus
 }

@@ -202,24 +202,39 @@ int main(int argc, char **argv) {
   syllable_destroy(detector);
 
   // Print and mix pulses
+  const char *onset_type_names[] = {"V", "U", "M"}; // Voiced, Unvoiced, Mixed
+
+  printf("\n=== Detected Syllables ===\n");
+  printf("%-8s %-6s %-6s %-6s %-6s %-6s %-6s %-6s %-6s %-6s %-5s %-4s\n",
+         "Time", "Peak", "SF", "HFE", "MFCC", "Wav", "Fuse", "F0", "dF0",
+         "Score", "Type", "Acc");
+  printf("---------------------------------------------------------------------"
+         "------------\n");
+
   for (int i = 0; i < total_event_count; i++) {
-    printf("[Syllable] Time: %.3fs | Peak: %.3f | Slope: %.1f | Eng: %.3f | "
-           "F0: %.1f (d:%.1f) | Score: %.2f\n",
-           all_events[i].time_seconds, all_events[i].peak_rate,
-           all_events[i].pr_slope, all_events[i].energy, all_events[i].f0,
-           all_events[i].delta_f0, all_events[i].prominence_score);
+    printf(
+        "%-8.3f %-6.3f %-6.3f %-6.3f %-6.3f %-6.3f %-6.2f %-6.1f %-6.1f %-6.2f "
+        "%-5s %s\n",
+        all_events[i].time_seconds, all_events[i].peak_rate,
+        all_events[i].spectral_flux, all_events[i].high_freq_energy,
+        all_events[i].mfcc_delta, all_events[i].wavelet_score,
+        all_events[i].fusion_score, all_events[i].f0, all_events[i].delta_f0,
+        all_events[i].prominence_score,
+        onset_type_names[all_events[i].onset_type],
+        all_events[i].is_accented ? "*" : "");
 
     if (output_filename && all_events[i].is_accented) {
       int pos = (int)(all_events[i].time_seconds * sample_rate);
-      int beep_len = sample_rate / 20; // 50ms
+      int beep_len = sample_rate / 20;    // 50ms
+      int start_pos = pos - beep_len / 2; // Center beep on timestamp
       for (int k = 0; k < beep_len; k++) {
-        if (pos + k >= 0 && pos + k < num_samples) {
+        if (start_pos + k >= 0 && start_pos + k < num_samples) {
           float val = 0.5f * sinf(2.0f * 3.14159f * 1000.0f * k / sample_rate);
-          float_data[pos + k] += val;
-          if (float_data[pos + k] > 1.0f)
-            float_data[pos + k] = 1.0f;
-          if (float_data[pos + k] < -1.0f)
-            float_data[pos + k] = -1.0f;
+          float_data[start_pos + k] += val;
+          if (float_data[start_pos + k] > 1.0f)
+            float_data[start_pos + k] = 1.0f;
+          if (float_data[start_pos + k] < -1.0f)
+            float_data[start_pos + k] = -1.0f;
         }
       }
     }

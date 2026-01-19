@@ -1,0 +1,27 @@
+{
+    "comment": "Default configuration for real-time prominence detection",
+    "detector": {
+        "sample_rate": 16000,
+        "threshold_fusion": 0.5,
+        "min_syllable_dist_ms": 100,
+        "hysteresis_on_factor": 0.8,
+        "hysteresis_off_factor": 0.5
+    },
+    "weights": {
+        "peak_rate": 0.35,
+        "spectral_flux": 0.30,
+        "high_freq": 0.15,
+        "mfcc_delta": 0.10,
+        "voiced_bonus": 0.10,
+        "comment": "Weights to be optimized on BURNC dev set"
+    },
+    "fusion": {
+        "alpha": 0.6,
+        "comment": "alpha * max(features) + (1-alpha) * weighted_avg"
+    },
+    "display": {
+        "show_features": true,
+        "show_feedback": true,
+        "compact_mode": false
+    }
+}

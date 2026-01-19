@@ -46,3 +46,12 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Emscripten SDK (external dependency)
+emsdk/
+
+# Wasm build outputs
+wasm_build/
+**/wasm_build/
+*.wasm
+!experiments/realtime_prominence/web_demo/*.wasm

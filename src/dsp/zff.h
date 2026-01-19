@@ -10,8 +10,10 @@ typedef struct {
   float trend_accum;
 } ZFF;
 
+#include <stddef.h>
+
 void zff_init(ZFF *z, int sample_rate, float trend_window_ms,
-              void *(*custom_alloc)(unsigned long long));
+              void *(*custom_alloc)(size_t));
 void zff_process(ZFF *z, float in, float *zff_out, float *slope_out);
 void zff_destroy(ZFF *z, void (*custom_free)(void *));
 
