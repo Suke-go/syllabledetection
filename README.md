@@ -14,7 +14,42 @@ Multi-Feature Fusion アーキテクチャを採用し、以下の特徴量を�
 - **Wavelet Transform**: ウェーブレット変換によるトランジェント検出
 - **Zero Frequency Filter (ZFF)**: 有声/無声判定とF0推定
 
+## プロジェクト構成
+
+```
+syllabledetection/
+├── src/
+│   ├── syllable_detector.c    # メイン検出器
+│   └── dsp/                   # DSPモジュール
+│       ├── agc.c/h            # 自動ゲイン制御
+│       ├── spectral_flux.c/h  # スペクトラルフラックス
+│       ├── mfcc.c/h           # MFCC特徴量
+│       ├── wavelet.c/h        # ウェーブレット変換
+│       └── high_freq_energy.c/h
+├── include/
+│   └── syllable_detector.h    # 公開API
+├── extern/
+│   └── kissfft/               # FFTライブラリ (submodule)
+├── experiments/
+│   └── realtime_prominence/   # リアルタイム実験
+│       ├── web_demo/          # ブラウザデモ (Wasm)
+│       └── paper/             # 論文原稿
+├── wrappers/                  # 言語バインディング
+│   ├── python/
+│   └── csharp/
+└── docs/                      # ドキュメント
+```
+
 ## ビルド
+
+### 前提条件
+
+```bash
+# サブモジュールの取得
+git submodule update --init --recursive
+```
+
+### ネイティブビルド
 
 ```bash
 mkdir build && cd build
@@ -24,153 +59,124 @@ cmake --build . --config Release
 
 Windows環境では `build/Release/syllable.dll` と `syllable.lib` が生成される。
 
+### WebAssembly ビルド
+
+```bash
+cd experiments/realtime_prominence
+# Emscripten SDK が必要
+./build_wasm.bat  # Windows
+```
+
 ## 使い方
 
-### C/C++
+### C/C++ (オフラインモード)
 
 ```c
 #include "syllable_detector.h"
 
-// 初期化
-SyllableConfig config = syllable_default_config(16000);  // サンプルレート指定
+SyllableConfig config = syllable_default_config(16000);
 SyllableDetector *detector = syllable_create(&config);
 
-// 処理（モノラル float 配列を渡す）
 float audio[1024];
 SyllableEvent events[64];
 int count = syllable_process(detector, audio, 1024, events, 64);
 
-// 結果を使う
 for (int i = 0; i < count; i++) {
     printf("%.3f秒: スコア %.2f\n", events[i].time_seconds, events[i].prominence_score);
 }
 
-// 終了時
-int remaining = syllable_flush(detector, events, 64);
 syllable_destroy(detector);
 ```
 
-### Python
+### C/C++ (リアルタイムモード) - NEW
 
-```python
-from wrappers.python.syllable import SyllableDetector
+```c
+#include "syllable_detector.h"
 
-detector = SyllableDetector("path/to/syllable.dll", sample_rate=16000)
+SyllableConfig config = syllable_default_config(48000);
+SyllableDetector *detector = syllable_create(&config);
 
-# 処理
-results = detector.process_block(audio_float_list)
-for r in results:
-    print(f"{r['time']:.3f}s: score={r['score']:.2f}")
+// リアルタイムモード有効化 + キャリブレーション開始
+syllable_set_realtime_mode(detector, 1);
 
-# 終了
-remaining = detector.flush()
-```
-
-### C# / Unity
-
-`wrappers/csharp/SyllableDetector.cs` をプロジェクトに追加。
-`syllable.dll` を `Assets/Plugins` に配置。
-
-```csharp
-using SyllableDetection;
-
-var detector = new SyllableDetector(16000);
-var events = new SyllableEvent[64];
-
-int count = detector.Process(audioData, events);
-for (int i = 0; i < count; i++) {
-    Debug.Log($"{events[i].time_seconds:F3}s: {events[i].prominence_score:F2}");
+// キャリブレーション中は無音を入力 (約2秒)
+while (syllable_is_calibrating(detector)) {
+    // 無音または環境ノイズを処理
+    syllable_process(detector, silence_buffer, 512, events, 64);
 }
 
-detector.Dispose();
+// 検出開始
+while (recording) {
+    int count = syllable_process(detector, audio_buffer, 512, events, 64);
+    for (int i = 0; i < count; i++) {
+        // prominence検出時の処理
+    }
+}
+
+syllable_destroy(detector);
 ```
 
-## 出力データ構造
+### Web (Wasm)
 
-`SyllableEvent` の各フィールド:
+```javascript
+const detector = new ProminenceDetectorWasm();
+await detector.init();
 
-### 基本情報
-| フィールド | 型 | 説明 |
-|-----------|-----|------|
-| `timestamp_samples` | uint64_t | オンセットのサンプルインデックス |
-| `time_seconds` | double | 検出時刻（秒） |
+// RTモード有効 (自動でキャリブレーション開始)
+detector.start();
 
-### レガシー特徴量
-| フィールド | 型 | 説明 |
-|-----------|-----|------|
-| `peak_rate` | float | 包絡線の立ち上がり速度 |
-| `pr_slope` | float | PeakRate の傾斜 |
-| `energy` | float | 音節エネルギー |
-| `f0` | float | 基本周波数 (Hz) |
-| `delta_f0` | float | 周囲との F0 差 |
-| `duration_s` | float | 推定持続時間（秒） |
+// prominence検出時のコールバック
+detector.onProminence = (event) => {
+    console.log(`Score: ${event.fusion_score}`);
+};
+```
 
-### Multi-Feature 特徴量 (NEW)
-| フィールド | 型 | 説明 |
-|-----------|-----|------|
-| `spectral_flux` | float | オンセット時のSpectral Flux値 |
-| `high_freq_energy` | float | オンセット時の高周波エネルギー |
-| `mfcc_delta` | float | オンセット時のMFCC変化量 |
-| `wavelet_score` | float | オンセット時のWaveletトランジェントスコア |
-| `fusion_score` | float | 統合検出スコア（0-1+） |
-| `onset_type` | SyllableOnsetType | オンセットタイプ（VOICED/UNVOICED/MIXED） |
+## リアルタイムモード API
 
-### 顕著性・アクセント
-| フィールド | 型 | 説明 |
-|-----------|-----|------|
-| `prominence_score` | float | 顕著性スコア（0.0〜1.0+, コンテキスト相対） |
-| `is_accented` | int | 1: 強調, 0: 非強調 |
+| 関数 | 説明 |
+|------|------|
+| `syllable_set_realtime_mode(d, enable)` | RTモード有効/無効化 |
+| `syllable_recalibrate(d)` | キャリブレーション再開 |
+| `syllable_is_calibrating(d)` | キャリブレーション中か確認 |
+
+### リアルタイムモードの特徴
+
+- **オンラインキャリブレーション**: 2秒間で環境ノイズを学習
+- **SNRベース閾値**: $\theta_k = P_{95}(f_k) \times 10^{\text{SNR}/10}$
+- **幾何平均Fusion**: 複数特徴量の同時超過を要求し、ノイズに強い
+- **レイテンシ**: 20ms以下
+- **メモリ**: 500KB以下
 
 ## 設定パラメータ
 
-`SyllableConfig` で調整可能:
-
-### 基本設定
 | パラメータ | デフォルト | 説明 |
 |-----------|-----------|------|
 | `sample_rate` | (必須) | 入力サンプルレート |
-| `min_syllable_dist_ms` | 100 | 最小音節間隔 (ms) |
-| `context_size` | 2 | 顕著性計算に使う前後音節数 |
+| `realtime_mode` | 0 | リアルタイムモード有効化 |
+| `calibration_duration_ms` | 2000 | キャリブレーション期間 (ms) |
+| `snr_threshold_db` | 6.0 | SNR閾値 (dB) |
+| `min_syllable_dist_ms` | 200 | 最小音節間隔 (ms) |
 
-### PeakRate 設定
-| パラメータ | デフォルト | 説明 |
-|-----------|-----------|------|
-| `peak_rate_band_min` | 500.0 | バンドパスフィルタ最小周波数 (Hz) |
-| `peak_rate_band_max` | 3200.0 | バンドパスフィルタ最大周波数 (Hz) |
-| `threshold_peak_rate` | 0.0003 | 検出閾値の下限 |
-| `adaptive_peak_rate_k` | 4.0 | 適応閾値の係数 |
-| `adaptive_peak_rate_tau_ms` | 500.0 | 適応統計の時定数 (ms) |
+## 実験・デモ
 
-### 特徴量有効化
-| パラメータ | デフォルト | 説明 |
-|-----------|-----------|------|
-| `enable_spectral_flux` | 1 | Spectral Flux検出を有効化 |
-| `enable_high_freq_energy` | 1 | 高周波エネルギー追跡を有効化 |
-| `enable_mfcc_delta` | 1 | MFCC Delta検出を有効化 |
-| `enable_wavelet` | 1 | Wavelet Transform検出を有効化 |
-| `enable_agc` | 1 | 自動ゲイン制御を有効化 |
+### Web Demo
 
-### Feature Fusion 重み
-| パラメータ | デフォルト | 説明 |
-|-----------|-----------|------|
-| `weight_peak_rate` | 0.25 | PeakRate の重み |
-| `weight_spectral_flux` | 0.20 | Spectral Flux の重み |
-| `weight_high_freq` | 0.15 | 高周波エネルギーの重み |
-| `weight_mfcc_delta` | 0.10 | MFCC Delta の重み |
-| `weight_wavelet` | 0.20 | Wavelet Transform の重み |
-| `weight_voiced_bonus` | 0.10 | 有声ボーナスの重み |
-
-## 配布パッケージ作成
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/package_dist.ps1
+```bash
+cd experiments/realtime_prominence/web_demo
+python -m http.server 8000
+# ブラウザで http://localhost:8000 を開く
 ```
 
-`dist/` に以下が生成される:
-- `bin/syllable.dll`
-- `lib/syllable.lib`
-- `include/syllable_detector.h`
-- `wrappers/`
+### 論文
+
+- `paper/interspeech_prominence.tex`: Interspeech 2026 論文
+- `paper/visceral_resonance.tex`: Human Augmentation デモ論文
+
+## 依存関係
+
+- [KissFFT](https://github.com/mborgerding/kissfft) - BSD License (submodule)
+- C99 コンパイラ
+- CMake 3.10+
 
 ## ライセンス
 
