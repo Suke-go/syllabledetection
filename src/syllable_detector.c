@@ -21,6 +21,7 @@
 #include "dsp/zff.h"
 #include <float.h>
 #include <math.h>
+#include <stdio.h> // For debug printf
 #include <stdlib.h>
 #include <string.h>
 
@@ -247,8 +248,8 @@ static inline float fast_geo_mean(float log_sum, int n) {
   return fast_exp2(log_sum / n * 1.442695f); // log2(e)
 }
 
-// 95th percentile using insertion sort
-static float percentile_95(const float *values, int n) {
+// 50th percentile (median) using insertion sort - robust to outliers
+static float percentile_50(const float *values, int n) {
   if (n < 5)
     return values[n > 0 ? n - 1 : 0];
   float sorted[RT_BUF_SIZE];
@@ -262,7 +263,7 @@ static float percentile_95(const float *values, int n) {
     }
     sorted[j + 1] = key;
   }
-  return sorted[(int)(n * 0.95f)];
+  return sorted[(int)(n * 0.50f)]; // 50th percentile (median)
 }
 
 // Finalize calibration
@@ -272,10 +273,30 @@ static void finalize_rt_calibration(struct SyllableDetector *d) {
 
   cal->gamma = powf(10.0f, d->config.snr_threshold_db / 10.0f);
 
+  // Calculate thresholds from calibration data: mean + gamma * std
   for (int k = 0; k < RT_NUM_FEATURES; k++) {
-    cal->thresh[k] = percentile_95(cal->buf[k], n) * cal->gamma;
-    if (cal->thresh[k] < RT_MIN_THRESH)
-      cal->thresh[k] = RT_MIN_THRESH;
+    if (n < 10) {
+      // Not enough data, use conservative default
+      cal->thresh[k] = 0.001f;
+    } else {
+      // Calculate mean and std from buffer
+      float sum = 0.0f, sum_sq = 0.0f;
+      for (int i = 0; i < n; i++) {
+        sum += cal->buf[k][i];
+        sum_sq += cal->buf[k][i] * cal->buf[k][i];
+      }
+      float mean = sum / n;
+      float var = (sum_sq / n) - (mean * mean);
+      float std = (var > 0) ? sqrtf(var) : 0.0f;
+
+      // Threshold = mean + gamma * std (SNR-based)
+      cal->thresh[k] = mean + cal->gamma * std;
+
+      // Ensure minimum threshold to avoid division by zero
+      if (cal->thresh[k] < 1e-6f) {
+        cal->thresh[k] = 1e-6f;
+      }
+    }
   }
   cal->is_calibrating = 0;
 }
@@ -300,7 +321,7 @@ static void update_rt_calibration(struct SyllableDetector *d) {
   }
 }
 
-// Compute real-time fusion score
+// Compute real-time fusion score using geometric mean
 static float compute_fusion_realtime(struct SyllableDetector *d) {
   RealtimeCalibration *cal = &d->rt_cal;
 
@@ -320,24 +341,30 @@ static float compute_fusion_realtime(struct SyllableDetector *d) {
     float r = f[k] / cal->thresh[k];
     if (r > 1.0f) {
       active++;
-      log_sum += fast_log2(r);
+      log_sum += logf(r);
     }
     if (r > max_r)
       max_r = r;
   }
 
+  // Voicing confidence boost
   float voiced_conf = fminf(1.0f, (float)d->voicing_counter / 5.0f);
   if (voiced_conf > 0.5f) {
     active++;
-    log_sum += fast_log2(1.0f + voiced_conf);
+    log_sum += logf(1.0f + voiced_conf);
   }
 
   if (active == 0)
     return 0.0f;
 
-  float geo_mean = fast_geo_mean(log_sum, active);
-  float raw = fmaxf(geo_mean, max_r * 0.5f);
-  return raw / (1.0f + raw);
+  // Geometric mean of ratios above threshold
+  float geo_mean = expf(log_sum / active);
+
+  // Normalize to [0, 1] range using sigmoid-like saturation
+  // geo_mean = 1 -> 0.5, geo_mean = 2 -> ~0.73, geo_mean = 4 -> ~0.88
+  float score = 1.0f - 1.0f / (1.0f + geo_mean * 0.5f);
+
+  return score;
 }
 
 // Update feature statistics (Welford's algorithm with sample counting)
@@ -1226,6 +1253,13 @@ int syllable_process(SyllableDetector *d, const float *input, int num_samples,
     float fusion_threshold_off = 0.4f * d->config.hysteresis_off_factor;
 
     // 5. State Machine
+    // SKIP state machine during realtime calibration to collect only noise
+    // floor
+    if (d->config.realtime_mode && d->rt_cal.is_calibrating) {
+      // Only collect calibration data, no onset detection
+      continue;
+    }
+
     if (d->state == STATE_IDLE) {
       // Traditional voiced onset condition
       int voiced_trigger = (peak_rate > threshold_on && d->is_voiced);
@@ -1285,14 +1319,33 @@ int syllable_process(SyllableDetector *d, const float *input, int num_samples,
       int enough_time_passed = (time_since_last > min_dist_samples * 2);
 
       // Combined: any of these allows new onset
+      // REALTIME FIX: In realtime mode, bypass F0 gate for immediate detection
       int f0_allows_new_onset =
-          f0_condition || strong_evidence || enough_time_passed;
+          d->config.realtime_mode
+              ? 1
+              : (f0_condition || strong_evidence || enough_time_passed);
+
+      // REALTIME FIX: Energy gate to prevent false positives from noise
+      // Require current energy to significantly exceed calibrated threshold
+      int energy_gate_passed = 1;
+      if (d->config.realtime_mode && !d->rt_cal.is_calibrating) {
+        // Energy must exceed calibrated noise floor by at least 3x
+        // This provides ~10dB SNR margin above noise
+        float energy_threshold = d->rt_cal.thresh[0] * 3.0f;
+
+        // Also require minimum absolute energy to avoid triggering on quiet
+        // rooms
+        float min_absolute_energy = 0.001f; // Roughly -60dB
+
+        energy_gate_passed = (d->current_energy > energy_threshold) &&
+                             (d->current_energy > min_absolute_energy);
+      }
 
       if ((voiced_trigger ||
            (fusion_trigger &&
             (d->config.allow_unvoiced_onsets || d->is_voiced)) ||
            unvoiced_trigger) &&
-          f0_allows_new_onset) {
+          f0_allows_new_onset && energy_gate_passed) {
         d->state = STATE_ONSET_RISING;
         d->state_timer = 0;
 
@@ -1383,12 +1436,30 @@ int syllable_process(SyllableDetector *d, const float *input, int num_samples,
       d->energy_accum += env_out;
 
       // End of Nucleus Condition
-      int energy_low = (env_out < d->wip_event.peak_rate * 0.1f);
+      // REALTIME FIX: Use fusion-based energy comparison in realtime mode
+      // since peak_rate may be near zero
+      int energy_low;
+      if (d->config.realtime_mode) {
+        // In realtime mode, check if current energy dropped significantly
+        // from the peak energy during this syllable
+        float peak_energy = d->wip_event.energy > 0
+                                ? d->wip_event.energy
+                                : d->max_fusion_score_in_syllable;
+        energy_low = (d->current_energy < peak_energy * 0.2f);
+      } else {
+        energy_low = (env_out < d->wip_event.peak_rate * 0.1f);
+      }
+
       int voicing_lost =
           (!d->is_voiced && d->current_onset_type == ONSET_TYPE_VOICED);
       int fusion_low = (d->current_fusion_score < fusion_threshold_off);
 
-      if (energy_low || voicing_lost || fusion_low) {
+      // REALTIME FIX: Add time-based exit to prevent infinite nucleus state
+      // Max nucleus duration: 100ms (typical syllable peak is 50-150ms)
+      int max_nucleus_samples = (int)(0.1f * d->config.sample_rate);
+      int nucleus_timeout = (d->state_timer > max_nucleus_samples);
+
+      if (energy_low || voicing_lost || fusion_low || nucleus_timeout) {
         d->state = STATE_COOLDOWN;
 
         // Finalize Event
@@ -1424,7 +1495,9 @@ int syllable_process(SyllableDetector *d, const float *input, int num_samples,
     }
 
     // 6. Delayed Event Emission
-    int context_needed = d->config.context_size;
+    // REALTIME FIX: In realtime mode, emit events immediately (no context
+    // delay)
+    int context_needed = d->config.realtime_mode ? 0 : d->config.context_size;
 
     while (d->buf_count > context_needed && events_written < max_events) {
       SyllableEvent *evt = &d->event_buffer[d->buf_read_idx].event;
@@ -1518,4 +1591,19 @@ void syllable_recalibrate(SyllableDetector *d) {
  */
 int syllable_is_calibrating(SyllableDetector *d) {
   return d ? d->rt_cal.is_calibrating : 0;
+}
+
+/**
+ * @brief Set SNR threshold for real-time mode detection
+ * @param d Detector instance
+ * @param snr_db SNR threshold in dB (default: 6.0, lower = more sensitive)
+ */
+void syllable_set_snr_threshold(SyllableDetector *d, float snr_db) {
+  if (!d)
+    return;
+  d->config.snr_threshold_db = snr_db;
+  // Update gamma immediately if already calibrated
+  if (!d->rt_cal.is_calibrating && d->config.realtime_mode) {
+    d->rt_cal.gamma = powf(10.0f, snr_db / 10.0f);
+  }
 }

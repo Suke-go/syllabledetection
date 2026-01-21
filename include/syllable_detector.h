@@ -179,6 +179,15 @@ SYLLABLE_API void syllable_recalibrate(SyllableDetector *detector);
  */
 SYLLABLE_API int syllable_is_calibrating(SyllableDetector *detector);
 
+/**
+ * @brief Set SNR threshold for real-time mode detection
+ * @param detector Detector instance
+ * @param snr_db SNR threshold in dB (default: 6.0, lower = more sensitive)
+ * @note Lower values make detection more sensitive, higher values more strict
+ */
+SYLLABLE_API void syllable_set_snr_threshold(SyllableDetector *detector,
+                                             float snr_db);
+
 #ifdef __cplusplus
 }
 #endif

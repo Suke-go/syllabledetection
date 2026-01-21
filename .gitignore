@@ -47,11 +47,17 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Emscripten SDK (external dependency)
+# Emscripten SDK (external dependency, install separately)
 emsdk/
+emsdk_clean/
 
-# Wasm build outputs
+# Wasm build outputs (intermediate files)
 wasm_build/
 **/wasm_build/
+
+# Wasm files (except web demo distribution)
 *.wasm
-!experiments/realtime_prominence/web_demo/*.wasm
+!experiments/realtime_prominence/web_demo/js/*.wasm
+
+# Wasm JS glue (except web demo distribution)  
+!experiments/realtime_prominence/web_demo/js/syllable.js

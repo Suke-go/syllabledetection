@@ -17,7 +17,7 @@ class ProminenceDetectorWasm {
     constructor(options = {}) {
         this.config = {
             sampleRate: options.sampleRate || 48000,
-            prominenceThreshold: options.prominenceThreshold || 0.75, // Balanced threshold
+            prominenceThreshold: options.prominenceThreshold || 0.2, // Low threshold for realtime mode
             minSyllableDistMs: options.minSyllableDistMs || 200,  // Slightly faster response
             calibrationDurationMs: options.calibrationDurationMs || 2000,
             minEnergyThreshold: options.minEnergyThreshold || 0.0001, // Lower energy gate
@@ -72,11 +72,16 @@ class ProminenceDetectorWasm {
             this._syllable_set_realtime_mode = this.wasmModule.cwrap('syllable_set_realtime_mode', null, ['number', 'number']);
             this._syllable_recalibrate = this.wasmModule.cwrap('syllable_recalibrate', null, ['number']);
             this._syllable_is_calibrating = this.wasmModule.cwrap('syllable_is_calibrating', 'number', ['number']);
+            this._syllable_set_snr_threshold = this.wasmModule.cwrap('syllable_set_snr_threshold', null, ['number', 'number']);
 
             // Create detector with default config
             // Note: syllable_default_config returns a struct by value, which is complex in Wasm
             // For now, we pass NULL to use internal defaults
             this.detector = this._syllable_create(0);
+
+            // Set lower SNR threshold BEFORE enabling realtime mode
+            // Default is 6dB which is too aggressive, use -3dB for high sensitivity
+            this._syllable_set_snr_threshold(this.detector, 6.0);
 
             // Enable real-time mode with geometric mean fusion
             this._syllable_set_realtime_mode(this.detector, 1);
@@ -149,6 +154,10 @@ class ProminenceDetectorWasm {
         this.isRunning = false;
         this.isCalibrating = false;
 
+        if (this._calibrationCheckInterval) {
+            clearInterval(this._calibrationCheckInterval);
+            this._calibrationCheckInterval = null;
+        }
         if (this.scriptProcessor) {
             this.scriptProcessor.disconnect();
             this.scriptProcessor = null;
@@ -172,9 +181,19 @@ class ProminenceDetectorWasm {
         this.isCalibrating = true;
         this.onCalibrationStart();
 
-        setTimeout(() => {
-            this._finishCalibration();
-        }, this.config.calibrationDurationMs);
+        // Trigger C-side recalibration
+        if (this._syllable_recalibrate) {
+            this._syllable_recalibrate(this.detector);
+        }
+
+        // Poll C-side calibration state
+        this._calibrationCheckInterval = setInterval(() => {
+            const stillCalibrating = this._syllable_is_calibrating(this.detector);
+            if (!stillCalibrating) {
+                this._finishCalibration();
+                clearInterval(this._calibrationCheckInterval);
+            }
+        }, 100);
     }
 
     /**
@@ -235,7 +254,13 @@ class ProminenceDetectorWasm {
         // DEBUG: Log processing stats periodically
         this._frameCount = (this._frameCount || 0) + 1;
         if (this._frameCount % 50 === 0) {  // Every ~1 second at 1024 samples/21ms
-            console.log(`[Wasm Debug] Frame ${this._frameCount}: numEvents=${numEvents}, calibrating=${this.isCalibrating}`);
+            // Calculate RMS of input audio
+            let sumSq = 0;
+            for (let j = 0; j < numSamples; j++) {
+                sumSq += inputData[j] * inputData[j];
+            }
+            const rms = Math.sqrt(sumSq / numSamples);
+            console.log(`[Wasm Debug] Frame ${this._frameCount}: numEvents=${numEvents}, calibrating=${this.isCalibrating}, RMS=${rms.toFixed(6)}`);
         }
 
         // Read events

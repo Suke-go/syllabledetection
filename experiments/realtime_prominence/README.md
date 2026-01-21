@@ -66,19 +66,68 @@ start_server.bat
 
 ### 前提条件
 
-1. [Emscripten SDK](https://emscripten.org/) をインストール
-2. `emsdk` ディレクトリをプロジェクトルートの親に配置
+1. [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) をインストール
+   ```bash
+   git clone https://github.com/emscripten-core/emsdk.git
+   cd emsdk
+   ./emsdk install latest
+   ./emsdk activate latest
+   ```
 
-### ビルド手順
+2. 環境変数を設定
+   ```bash
+   # Windows
+   emsdk_env.bat
+   
+   # Linux/Mac
+   source ./emsdk_env.sh
+   ```
+
+### ビルド手順 (推奨: 直接 emcc)
 
 ```bash
-# Windows
-build_wasm.bat
+cd experiments/realtime_prominence
 
-# 出力
-# wasm_build/syllable.js
-# wasm_build/syllable.wasm
+# ビルドディレクトリ作成
+mkdir -p wasm_build
+
+# emcc でビルド
+emcc \
+  -I ../../include \
+  -I ../../extern/kissfft \
+  ../../src/syllable_detector.c \
+  ../../src/dsp/agc.c \
+  ../../src/dsp/biquad.c \
+  ../../src/dsp/envelope.c \
+  ../../src/dsp/high_freq_energy.c \
+  ../../src/dsp/mfcc.c \
+  ../../src/dsp/spectral_flux.c \
+  ../../src/dsp/wavelet.c \
+  ../../src/dsp/zff.c \
+  ../../extern/kissfft/kiss_fft.c \
+  ../../extern/kissfft/kiss_fftr.c \
+  -O3 \
+  -s WASM=1 \
+  -s MODULARIZE=1 \
+  -s EXPORT_NAME=SyllableModule \
+  -s "EXPORTED_FUNCTIONS=['_syllable_create','_syllable_process','_syllable_flush','_syllable_destroy','_syllable_reset','_syllable_default_config','_syllable_set_realtime_mode','_syllable_recalibrate','_syllable_is_calibrating','_syllable_set_snr_threshold','_malloc','_free']" \
+  -s "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','setValue','getValue']" \
+  -s ALLOW_MEMORY_GROWTH=1 \
+  -s INITIAL_MEMORY=16MB \
+  -o wasm_build/syllable.js
+
+# web_demo にコピー
+cp wasm_build/syllable.js web_demo/js/
+cp wasm_build/syllable.wasm web_demo/js/
 ```
+
+### 代替: バッチファイル (Windows)
+
+```bash
+build_wasm.bat
+```
+
+**注意**: `build_wasm.bat` は `../../emsdk` にEmscripten SDKがある前提です。別の場所にインストールした場合は上記のマニュアル方法を使用してください。
 
 ### エクスポート関数
 

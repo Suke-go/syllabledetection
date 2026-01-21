@@ -33,7 +33,7 @@ echo Building Wasm...
     -s WASM=1 ^
     -s MODULARIZE=1 ^
     -s EXPORT_NAME="SyllableModule" ^
-    -s EXPORTED_FUNCTIONS="['_syllable_create','_syllable_process','_syllable_flush','_syllable_destroy','_syllable_reset','_syllable_default_config','_syllable_set_realtime_mode','_syllable_recalibrate','_syllable_is_calibrating','_malloc','_free']" ^
+    -s EXPORTED_FUNCTIONS="['_syllable_create','_syllable_process','_syllable_flush','_syllable_destroy','_syllable_reset','_syllable_default_config','_syllable_set_realtime_mode','_syllable_recalibrate','_syllable_is_calibrating','_syllable_set_snr_threshold','_malloc','_free']" ^
     -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','setValue','getValue']" ^
     -s ALLOW_MEMORY_GROWTH=1 ^
     -s INITIAL_MEMORY=16MB ^

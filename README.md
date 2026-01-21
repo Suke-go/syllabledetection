@@ -61,10 +61,12 @@ Windows環境では `build/Release/syllable.dll` と `syllable.lib` が生成さ
 
 ### WebAssembly ビルド
 
+詳細な手順は [experiments/realtime_prominence/README.md](experiments/realtime_prominence/README.md#wasm-ビルド) を参照。
+
 ```bash
 cd experiments/realtime_prominence
-# Emscripten SDK が必要
-./build_wasm.bat  # Windows
+# Emscripten SDK のセットアップ後
+emcc [source files] -o wasm_build/syllable.js  # 詳細はREADME参照
 ```
 
 ## 使い方
